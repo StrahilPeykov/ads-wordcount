@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  # Redis cache service
+  redis:
+    image: redis:7-alpine
+    container_name: word_count_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - word_count_network
+
+  # Server (Phase 2)
+  server:
+    build: .
+    container_name: word_count_server
+    volumes:
+      - ./server:/app/server
+      - ./texts:/app/texts
+    command: python /app/server/server.py
+    ports:
+      - "18861:18861"
+    depends_on:
+      - redis
+    networks:
+      - word_count_network
+
+  # Client
+  client:
+    build: .
+    container_name: word_count_client
+    volumes:
+      - ./client:/app/client
+    command: python /app/client/client.py
+    depends_on:
+      - server
+    networks:
+      - word_count_network
+    stdin_open: true
+    tty: true
+
+  # Load balancer (Phase 3 - uncomment when ready)
+  # load_balancer:
+  #   build: .
+  #   container_name: word_count_lb
+  #   volumes:
+  #     - ./load_balancer:/app/load_balancer
+  #   command: python /app/load_balancer/load_balancer.py
+  #   ports:
+  #     - "18860:18860"
+  #   depends_on:
+  #     - server
+  #   networks:
+  #     - word_count_network
+
+  # Additional servers for Phase 3 (uncomment when ready)
+  # server2:
+  #   build: .
+  #   container_name: word_count_server2
+  #   volumes:
+  #     - ./server:/app/server
+  #     - ./texts:/app/texts
+  #   command: python /app/server/server.py
+  #   ports:
+  #     - "18862:18861"
+  #   depends_on:
+  #     - redis
+  #   networks:
+  #     - word_count_network
+
+  # server3:
+  #   build: .
+  #   container_name: word_count_server3
+  #   volumes:
+  #     - ./server:/app/server
+  #     - ./texts:/app/texts
+  #   command: python /app/server/server.py
+  #   ports:
+  #     - "18863:18861"
+  #   depends_on:
+  #     - redis
+  #   networks:
+  #     - word_count_network
+
+networks:
+  word_count_network:
+    driver: bridge

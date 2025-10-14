@@ -1,0 +1,10 @@
+# RPC Framework
+rpyc==5.3.1
+
+# In-memory database
+redis==5.0.1
+
+# Async IO support (for load balancer)
+asyncio
+
+# Additional utilities (if needed)

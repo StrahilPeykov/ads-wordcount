@@ -10,22 +10,82 @@ services:
     networks:
       - word_count_network
 
-  # Server (Phase 2)
-  server:
+  # Server 1
+  server1:
     build: .
-    container_name: word_count_server
+    container_name: word_count_server1
+    hostname: server1
     volumes:
       - ./server:/app/server
       - ./texts:/app/texts
     command: python /app/server/server.py
-    ports:
-      - "18861:18861"
+    environment:
+      - SERVER_NAME=server1
+      - SERVER_PORT=18861
+    expose:
+      - "18861"
     depends_on:
       - redis
     networks:
       - word_count_network
 
-  # Client
+  # Server 2
+  server2:
+    build: .
+    container_name: word_count_server2
+    hostname: server2
+    volumes:
+      - ./server:/app/server
+      - ./texts:/app/texts
+    command: python /app/server/server.py
+    environment:
+      - SERVER_NAME=server2
+      - SERVER_PORT=18861
+    expose:
+      - "18861"
+    depends_on:
+      - redis
+    networks:
+      - word_count_network
+
+  # Server 3
+  server3:
+    build: .
+    container_name: word_count_server3
+    hostname: server3
+    volumes:
+      - ./server:/app/server
+      - ./texts:/app/texts
+    command: python /app/server/server.py
+    environment:
+      - SERVER_NAME=server3
+      - SERVER_PORT=18861
+    expose:
+      - "18861"
+    depends_on:
+      - redis
+    networks:
+      - word_count_network
+
+  # Load Balancer
+  load_balancer:
+    build: .
+    container_name: word_count_lb
+    volumes:
+      - ./load_balancer:/app/load_balancer
+    command: python /app/load_balancer/load_balancer.py
+    ports:
+      - "18860:18860"
+    depends_on:
+      - server1
+      - server2
+      - server3
+    networks:
+      - word_count_network
+    environment:
+      - LB_ALGORITHM=round_robin
+
+  # Client (now connects to load balancer)
   client:
     build: .
     container_name: word_count_client
@@ -33,54 +93,11 @@ services:
       - ./client:/app/client
     command: python /app/client/client.py
     depends_on:
-      - server
+      - load_balancer
     networks:
       - word_count_network
     stdin_open: true
     tty: true
-
-  # Load balancer (Phase 3 - uncomment when ready)
-  # load_balancer:
-  #   build: .
-  #   container_name: word_count_lb
-  #   volumes:
-  #     - ./load_balancer:/app/load_balancer
-  #   command: python /app/load_balancer/load_balancer.py
-  #   ports:
-  #     - "18860:18860"
-  #   depends_on:
-  #     - server
-  #   networks:
-  #     - word_count_network
-
-  # Additional servers for Phase 3 (uncomment when ready)
-  # server2:
-  #   build: .
-  #   container_name: word_count_server2
-  #   volumes:
-  #     - ./server:/app/server
-  #     - ./texts:/app/texts
-  #   command: python /app/server/server.py
-  #   ports:
-  #     - "18862:18861"
-  #   depends_on:
-  #     - redis
-  #   networks:
-  #     - word_count_network
-
-  # server3:
-  #   build: .
-  #   container_name: word_count_server3
-  #   volumes:
-  #     - ./server:/app/server
-  #     - ./texts:/app/texts
-  #   command: python /app/server/server.py
-  #   ports:
-  #     - "18863:18861"
-  #   depends_on:
-  #     - redis
-  #   networks:
-  #     - word_count_network
 
 networks:
   word_count_network:

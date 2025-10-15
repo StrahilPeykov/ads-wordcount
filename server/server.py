@@ -2,6 +2,7 @@
 """
 Word Count Server
 Phase 2: Basic RPyC server implementation with Redis caching
+Phase 3: Added server identification for load balancing
 """
 
 import rpyc
@@ -25,6 +26,8 @@ class WordCountService(rpyc.Service):
             decode_responses=True
         )
         self.text_directory = Path('/app/texts')
+        self.server_name = os.getenv('SERVER_NAME', 'unknown_server')
+        self.request_count = 0
         
     def exposed_count_word(self, keyword, filename):
         """
@@ -35,26 +38,34 @@ class WordCountService(rpyc.Service):
             filename (str): Name of the text file
             
         Returns:
-            int: Number of occurrences of the keyword
+            dict: Contains count, server info, and cache status
         """
-        # TODO: Implement caching logic with Redis
-        # TODO: Implement word counting logic
-        # TODO: Measure and return execution time
-        
+        self.request_count += 1
         cache_key = f"{filename}:{keyword}"
         
         # Check cache first
         cached_result = self.redis_client.get(cache_key)
         if cached_result is not None:
-            print(f"Cache hit for {cache_key}")
-            return int(cached_result)
+            print(f"[{self.server_name}] Cache HIT for '{keyword}' (Request #{self.request_count})")
+            return {
+                'count': int(cached_result),
+                'server': self.server_name,
+                'cached': True,
+                'request_number': self.request_count
+            }
         
-        print(f"Cache miss for {cache_key}, computing...")
+        print(f"[{self.server_name}] Cache MISS for '{keyword}', computing... (Request #{self.request_count})")
         
         # Read file and count occurrences
         file_path = self.text_directory / filename
         if not file_path.exists():
-            return -1  # File not found
+            return {
+                'count': -1,
+                'server': self.server_name,
+                'cached': False,
+                'error': 'File not found',
+                'request_number': self.request_count
+            }
         
         with open(file_path, 'r', encoding='utf-8') as f:
             text = f.read().lower()
@@ -63,7 +74,12 @@ class WordCountService(rpyc.Service):
         # Cache the result
         self.redis_client.set(cache_key, count)
         
-        return count
+        return {
+            'count': count,
+            'server': self.server_name,
+            'cached': False,
+            'request_number': self.request_count
+        }
     
     def exposed_get_server_info(self):
         """
@@ -73,15 +89,39 @@ class WordCountService(rpyc.Service):
             dict: Server information
         """
         return {
+            'server_name': self.server_name,
             'hostname': os.getenv('HOSTNAME', 'unknown'),
-            'container_name': 'word_count_server'
+            'request_count': self.request_count
         }
+    
+    def exposed_health_check(self):
+        """
+        Health check endpoint for load balancer.
+        
+        Returns:
+            dict: Health status
+        """
+        try:
+            # Check Redis connection
+            self.redis_client.ping()
+            return {
+                'status': 'healthy',
+                'server': self.server_name
+            }
+        except Exception as e:
+            return {
+                'status': 'unhealthy',
+                'server': self.server_name,
+                'error': str(e)
+            }
 
 
 if __name__ == '__main__':
     # Start the RPyC server
-    port = 18861
-    print(f"Starting Word Count Server on port {port}...")
+    port = int(os.getenv('SERVER_PORT', 18861))
+    server_name = os.getenv('SERVER_NAME', 'unknown_server')
+    
+    print(f"Starting Word Count Server '{server_name}' on port {port}...")
     
     server = ThreadedServer(
         WordCountService,
@@ -92,4 +132,4 @@ if __name__ == '__main__':
     try:
         server.start()
     except KeyboardInterrupt:
-        print("\nShutting down server...")
+        print(f"\nShutting down server '{server_name}'...")

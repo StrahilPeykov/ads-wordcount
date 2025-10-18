@@ -89,13 +89,15 @@ services:
     container_name: word_count_client
     volumes:
       - ./client:/app/client
-    command: python /app/client/client.py
+    command: sleep infinity
     depends_on:
       - load_balancer
     networks:
       - word_count_network
     stdin_open: true
     tty: true
+    profiles:
+      - testing
 
 networks:
   word_count_network:

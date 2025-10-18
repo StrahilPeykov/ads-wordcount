@@ -3,8 +3,7 @@
 Load Balancer for Word Count Service
 """
 
-import socket
-import threading
+import asyncio
 import os
 import time
 from typing import List, Optional
@@ -26,15 +25,15 @@ class Server:
         self.active_connections = 0
         self.total_requests = 0
         self.last_health_check = time.time()
-        self.lock = threading.Lock()
+        self.lock = asyncio.Lock()
     
-    def increment_connections(self):
-        with self.lock:
+    async def increment_connections(self):
+        async with self.lock:
             self.active_connections += 1
             self.total_requests += 1
     
-    def decrement_connections(self):
-        with self.lock:
+    async def decrement_connections(self):
+        async with self.lock:
             self.active_connections -= 1
     
     def __str__(self):
@@ -47,7 +46,7 @@ class LoadBalancer:
         self.listen_port = listen_port
         self.servers: List[Server] = []
         self.current_server_index = 0
-        self.lock = threading.Lock()
+        self.lock = asyncio.Lock()
         self.running = True
         
     def add_server(self, host: str, port: int, name: str):
@@ -55,55 +54,57 @@ class LoadBalancer:
         self.servers.append(server)
         print(f"✓ Added server: {server}")
     
-    def get_next_server(self) -> Optional[Server]:
+    async def get_next_server(self) -> Optional[Server]:
         if self.algorithm == LoadBalancingAlgorithm.ROUND_ROBIN:
-            return self._round_robin()
+            return await self._round_robin()
         elif self.algorithm == LoadBalancingAlgorithm.LEAST_CONNECTIONS:
-            return self._least_connections()
+            return await self._least_connections()
         else:
-            return self._round_robin()
+            return await self._round_robin()
     
-    def _round_robin(self) -> Optional[Server]:
+    async def _round_robin(self) -> Optional[Server]:
         """Round-robin load balancing."""
         healthy_servers = [s for s in self.servers if s.is_healthy]
         if not healthy_servers:
             return None
         
-        with self.lock:
+        async with self.lock:
             server = healthy_servers[self.current_server_index % len(healthy_servers)]
             self.current_server_index += 1
         return server
     
-    def _least_connections(self) -> Optional[Server]:
+    async def _least_connections(self) -> Optional[Server]:
         """Least connections load balancing."""
         healthy_servers = [s for s in self.servers if s.is_healthy]
         if not healthy_servers:
             return None
         return min(healthy_servers, key=lambda s: s.active_connections)
     
-    def check_server_health(self, server: Server) -> bool:
+    async def check_server_health(self, server: Server) -> bool:
         """
         Check if a server is healthy by attempting to connect.
         """
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            sock.connect((server.host, server.port))
-            sock.close()
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(server.host, server.port),
+                timeout=2.0
+            )
+            writer.close()
+            await writer.wait_closed()
             return True
         except Exception:
             return False
     
-    def health_check_loop(self):
+    async def health_check_loop(self):
         print("[Health Monitor] Starting health check loop...")
         
         while self.running:
-            time.sleep(3)  # Check every 3 seconds
+            await asyncio.sleep(3)  # Check every 3 seconds
             print("\n[Health Check] Checking server health...")
             
             for server in self.servers:
                 was_healthy = server.is_healthy
-                is_healthy = self.check_server_health(server)
+                is_healthy = await self.check_server_health(server)
                 server.is_healthy = is_healthy
                 server.last_health_check = time.time()
                 
@@ -115,65 +116,58 @@ class LoadBalancer:
                     status = "✓ HEALTHY" if is_healthy else "✗ UNHEALTHY"
                     print(f"  {server.name}: {status} (Requests: {server.total_requests})")
     
-    def forward_data(self, source: socket.socket, destination: socket.socket, direction: str):
+    async def forward_data(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str):
         """
-        Forward data from source socket to destination socket.
+        Forward data from source to destination stream.
         """
         try:
             while self.running:
-                data = source.recv(4096)
+                data = await reader.read(4096)
                 if not data:
                     break
-                destination.sendall(data)
+                writer.write(data)
+                await writer.drain()
         except Exception:
             pass
         finally:
             try:
-                source.shutdown(socket.SHUT_RD)
-            except:
-                pass
-            try:
-                destination.shutdown(socket.SHUT_WR)
+                writer.close()
+                await writer.wait_closed()
             except:
                 pass
     
-    def handle_client(self, client_socket: socket.socket, client_address):
+    async def handle_client(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter):
         """
         Handle a client connection by forwarding to a backend server.
         """
         server = None
-        server_socket = None
+        server_reader = None
+        server_writer = None
+        client_address = client_writer.get_extra_info('peername')
         
         try:
-            server = self.get_next_server()
+            server = await self.get_next_server()
             if not server:
                 print(f"✗ No healthy servers available for {client_address}")
-                client_socket.close()
+                client_writer.close()
+                await client_writer.wait_closed()
                 return
             
-            server.increment_connections()
+            await server.increment_connections()
             print(f"→ Forwarding {client_address} to {server.name}")
             
-            server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server_socket.settimeout(30)
-            server_socket.connect((server.host, server.port))
-            
-            # Forward data bidirectionally
-            client_to_server = threading.Thread(
-                target=self.forward_data,
-                args=(client_socket, server_socket, "client→server"),
-                daemon=True
-            )
-            server_to_client = threading.Thread(
-                target=self.forward_data,
-                args=(server_socket, client_socket, "server→client"),
-                daemon=True
+            # Connect to backend server
+            server_reader, server_writer = await asyncio.wait_for(
+                asyncio.open_connection(server.host, server.port),
+                timeout=30.0
             )
             
-            client_to_server.start()
-            server_to_client.start()
-            client_to_server.join()
-            server_to_client.join()
+            # Forward data bidirectionally using asyncio.gather
+            await asyncio.gather(
+                self.forward_data(client_reader, server_writer, "client→server"),
+                self.forward_data(server_reader, client_writer, "server→client"),
+                return_exceptions=True
+            )
             
         except Exception as e:
             print(f"✗ Error handling client {client_address}: {e}")
@@ -181,29 +175,32 @@ class LoadBalancer:
                 server.is_healthy = False
         finally:
             if server:
-                server.decrement_connections()
-            if client_socket:
+                await server.decrement_connections()
+            if client_writer:
                 try:
-                    client_socket.close()
+                    client_writer.close()
+                    await client_writer.wait_closed()
                 except:
                     pass
-            if server_socket:
+            if server_writer:
                 try:
-                    server_socket.close()
+                    server_writer.close()
+                    await server_writer.wait_closed()
                 except:
                     pass
     
-    def start(self):
+    async def start(self):
         """Start the load balancer server."""
         
-        # Start health check thread
-        health_thread = threading.Thread(target=self.health_check_loop, daemon=True)
-        health_thread.start()
+        # Start health check task
+        health_task = asyncio.create_task(self.health_check_loop())
         
-        listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listen_socket.bind(('0.0.0.0', self.listen_port))
-        listen_socket.listen(10)
+        # Create server
+        server = await asyncio.start_server(
+            self.handle_client,
+            '0.0.0.0',
+            self.listen_port
+        )
         
         print()
         print("="*60)
@@ -213,21 +210,19 @@ class LoadBalancer:
         print()
         
         try:
-            while self.running:
-                client_socket, client_address = listen_socket.accept()
-                client_thread = threading.Thread(
-                    target=self.handle_client,
-                    args=(client_socket, client_address),
-                    daemon=True
-                )
-                client_thread.start()
+            async with server:
+                await server.serve_forever()
                 
         except KeyboardInterrupt:
             print("\n\nShutting down load balancer...")
             self.print_stats()
         finally:
             self.running = False
-            listen_socket.close()
+            health_task.cancel()
+            try:
+                await health_task
+            except asyncio.CancelledError:
+                pass
     
     def print_stats(self):
         print("\n" + "="*60)
@@ -243,7 +238,7 @@ class LoadBalancer:
         print("="*60 + "\n")
 
 
-def main():
+async def main():
     """Main function to start the load balancer."""
     
     # Get algorithm from environment or use default
@@ -251,7 +246,7 @@ def main():
     algorithm = LoadBalancingAlgorithm(algorithm_str)
     
     print("="*60)
-    print("WORD COUNT LOAD BALANCER - Phase 3")
+    print("WORD COUNT LOAD BALANCER - Phase 4")
     print("="*60)
     print(f"Algorithm: {algorithm.value}")
     print()
@@ -262,8 +257,8 @@ def main():
     lb.add_server('server2', 18861, 'server2')
     lb.add_server('server3', 18861, 'server3')
     
-    lb.start()
+    await lb.start()
 
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())

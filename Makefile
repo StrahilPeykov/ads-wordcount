@@ -19,6 +19,11 @@ help:
 	@echo "Phase 3 - Testing Different Algorithms:"
 	@echo "make test-round-robin      - Test with Round Robin"
 	@echo "make test-least-conn       - Test with Least Connections"
+	@echo ""
+	@echo "Cache Management:"
+	@echo "make clear-cache           - Clear Redis cache"
+	@echo "make test-with-clear       - Clear cache and run test"
+	@echo "make compare-cache         - Compare performance with/without cache"
 
 build:
 	docker build --pull -t ads:lab .
@@ -75,7 +80,6 @@ test-round-robin:
 	@LB_ALGORITHM=round_robin docker-compose up -d
 	@sleep 5
 	@docker-compose run --rm client python /app/client/test_load_balancer.py
-	@docker-compose down
 
 test-least-conn:
 	@echo "Testing Least Connections Algorithm..."
@@ -83,4 +87,15 @@ test-least-conn:
 	@LB_ALGORITHM=least_connections docker-compose up -d
 	@sleep 5
 	@docker-compose run --rm client python /app/client/test_load_balancer.py
-	@docker-compose down
+
+clear-cache:
+	@echo "Clearing Redis cache..."
+	@docker-compose exec -T redis redis-cli FLUSHALL
+	@echo "✓ Cache cleared!"
+
+test-with-clear:
+	@echo "Clearing cache and running test..."
+	@docker-compose exec -T redis redis-cli FLUSHALL
+	@echo "✓ Cache cleared, running test..."
+	@sleep 1
+	@docker-compose run --rm client python /app/client/test_load_balancer.py

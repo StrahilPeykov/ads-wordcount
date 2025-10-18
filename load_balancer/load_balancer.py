@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
 Load Balancer for Word Count Service
-Phase 3: Load balancing implementation with multiple algorithms
-Phase 4: Add fault tolerance and health monitoring
 """
 
-import asyncio
-import rpyc
+import socket
+import threading
 import os
-from typing import List, Dict
+import time
+from typing import List, Optional
 from enum import Enum
 
 
@@ -19,8 +18,6 @@ class LoadBalancingAlgorithm(Enum):
 
 
 class Server:
-    """Represents a backend server."""
-    
     def __init__(self, host: str, port: int, name: str):
         self.host = host
         self.port = port
@@ -28,53 +25,37 @@ class Server:
         self.is_healthy = True
         self.active_connections = 0
         self.total_requests = 0
+        self.last_health_check = time.time()
+        self.lock = threading.Lock()
+    
+    def increment_connections(self):
+        with self.lock:
+            self.active_connections += 1
+            self.total_requests += 1
+    
+    def decrement_connections(self):
+        with self.lock:
+            self.active_connections -= 1
     
     def __str__(self):
         return f"{self.name} ({self.host}:{self.port})"
 
 
 class LoadBalancer:
-    """
-    Load balancer that distributes requests across multiple servers.
-    Phase 3: Uses RPyC to forward requests (simpler than socket forwarding).
-    """
-    
-    def __init__(self, algorithm: LoadBalancingAlgorithm):
+    def __init__(self, algorithm: LoadBalancingAlgorithm, listen_port: int = 18860):
         self.algorithm = algorithm
+        self.listen_port = listen_port
         self.servers: List[Server] = []
         self.current_server_index = 0
-        self.connections: Dict[str, rpyc.Connection] = {}
+        self.lock = threading.Lock()
+        self.running = True
         
     def add_server(self, host: str, port: int, name: str):
-        """Add a backend server to the pool."""
         server = Server(host, port, name)
         self.servers.append(server)
         print(f"✓ Added server: {server}")
     
-    def connect_to_servers(self):
-        """Establish connections to all backend servers."""
-        print("\nConnecting to backend servers...")
-        for server in self.servers:
-            try:
-                conn = rpyc.connect(
-                    server.host,
-                    server.port,
-                    config={'allow_public_attrs': True, 'sync_request_timeout': 30}
-                )
-                self.connections[server.name] = conn
-                server.is_healthy = True
-                print(f"✓ Connected to {server.name}")
-            except Exception as e:
-                print(f"✗ Failed to connect to {server.name}: {e}")
-                server.is_healthy = False
-    
-    def get_next_server(self) -> Server:
-        """
-        Select the next server based on the load balancing algorithm.
-        
-        Returns:
-            Server: Selected server for the next request
-        """
+    def get_next_server(self) -> Optional[Server]:
         if self.algorithm == LoadBalancingAlgorithm.ROUND_ROBIN:
             return self._round_robin()
         elif self.algorithm == LoadBalancingAlgorithm.LEAST_CONNECTIONS:
@@ -82,78 +63,173 @@ class LoadBalancer:
         else:
             return self._round_robin()
     
-    def _round_robin(self) -> Server:
+    def _round_robin(self) -> Optional[Server]:
         """Round-robin load balancing."""
         healthy_servers = [s for s in self.servers if s.is_healthy]
         if not healthy_servers:
-            raise Exception("No healthy servers available")
+            return None
         
-        server = healthy_servers[self.current_server_index % len(healthy_servers)]
-        self.current_server_index += 1
+        with self.lock:
+            server = healthy_servers[self.current_server_index % len(healthy_servers)]
+            self.current_server_index += 1
         return server
     
-    def _least_connections(self) -> Server:
+    def _least_connections(self) -> Optional[Server]:
         """Least connections load balancing."""
         healthy_servers = [s for s in self.servers if s.is_healthy]
         if not healthy_servers:
-            raise Exception("No healthy servers available")
-        
+            return None
         return min(healthy_servers, key=lambda s: s.active_connections)
     
-    def forward_request(self, method: str, *args, **kwargs):
+    def check_server_health(self, server: Server) -> bool:
         """
-        Forward a request to a backend server.
+        Check if a server is healthy by attempting to connect.
+        """
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            sock.connect((server.host, server.port))
+            sock.close()
+            return True
+        except Exception:
+            return False
+    
+    def health_check_loop(self):
+        print("[Health Monitor] Starting health check loop...")
         
-        Args:
-            method: The RPC method name
-            *args, **kwargs: Arguments to pass to the method
+        while self.running:
+            time.sleep(3)  # Check every 3 seconds
+            print("\n[Health Check] Checking server health...")
             
-        Returns:
-            The response from the backend server
+            for server in self.servers:
+                was_healthy = server.is_healthy
+                is_healthy = self.check_server_health(server)
+                server.is_healthy = is_healthy
+                server.last_health_check = time.time()
+                
+                if was_healthy and not is_healthy:
+                    print(f"  {server.name}: ✗ FAILED")
+                elif not was_healthy and is_healthy:
+                    print(f"  {server.name}: ✓ RECOVERED")
+                else:
+                    status = "✓ HEALTHY" if is_healthy else "✗ UNHEALTHY"
+                    print(f"  {server.name}: {status} (Requests: {server.total_requests})")
+    
+    def forward_data(self, source: socket.socket, destination: socket.socket, direction: str):
         """
-        server = self.get_next_server()
-        server.active_connections += 1
-        server.total_requests += 1
+        Forward data from source socket to destination socket.
+        """
+        try:
+            while self.running:
+                data = source.recv(4096)
+                if not data:
+                    break
+                destination.sendall(data)
+        except Exception:
+            pass
+        finally:
+            try:
+                source.shutdown(socket.SHUT_RD)
+            except:
+                pass
+            try:
+                destination.shutdown(socket.SHUT_WR)
+            except:
+                pass
+    
+    def handle_client(self, client_socket: socket.socket, client_address):
+        """
+        Handle a client connection by forwarding to a backend server.
+        """
+        server = None
+        server_socket = None
         
         try:
-            conn = self.connections[server.name]
-            result = getattr(conn.root, method)(*args, **kwargs)
+            server = self.get_next_server()
+            if not server:
+                print(f"✗ No healthy servers available for {client_address}")
+                client_socket.close()
+                return
             
-            # Add load balancer info to response
-            if isinstance(result, dict):
-                result['load_balancer'] = 'active'
-                result['algorithm'] = self.algorithm.value
+            server.increment_connections()
+            print(f"→ Forwarding {client_address} to {server.name}")
             
-            return result
+            server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_socket.settimeout(30)
+            server_socket.connect((server.host, server.port))
+            
+            # Forward data bidirectionally
+            client_to_server = threading.Thread(
+                target=self.forward_data,
+                args=(client_socket, server_socket, "client→server"),
+                daemon=True
+            )
+            server_to_client = threading.Thread(
+                target=self.forward_data,
+                args=(server_socket, client_socket, "server→client"),
+                daemon=True
+            )
+            
+            client_to_server.start()
+            server_to_client.start()
+            client_to_server.join()
+            server_to_client.join()
+            
         except Exception as e:
-            print(f"✗ Error forwarding request to {server.name}: {e}")
-            server.is_healthy = False
-            raise
+            print(f"✗ Error handling client {client_address}: {e}")
+            if server:
+                server.is_healthy = False
         finally:
-            server.active_connections -= 1
-    
-    async def health_check_loop(self):
-        """
-        Periodically check the health of all servers.
-        Phase 4: Will implement proper health monitoring.
-        """
-        while True:
-            await asyncio.sleep(10)
-            print("\n[Health Check] Checking server health...")
-            for server in self.servers:
+            if server:
+                server.decrement_connections()
+            if client_socket:
                 try:
-                    if server.name in self.connections:
-                        conn = self.connections[server.name]
-                        health = conn.root.health_check()
-                        server.is_healthy = (health['status'] == 'healthy')
-                        status = "✓ HEALTHY" if server.is_healthy else "✗ UNHEALTHY"
-                        print(f"  {server.name}: {status} (Requests: {server.total_requests})")
-                except Exception as e:
-                    server.is_healthy = False
-                    print(f"  {server.name}: ✗ UNHEALTHY - {e}")
+                    client_socket.close()
+                except:
+                    pass
+            if server_socket:
+                try:
+                    server_socket.close()
+                except:
+                    pass
+    
+    def start(self):
+        """Start the load balancer server."""
+        
+        # Start health check thread
+        health_thread = threading.Thread(target=self.health_check_loop, daemon=True)
+        health_thread.start()
+        
+        listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listen_socket.bind(('0.0.0.0', self.listen_port))
+        listen_socket.listen(10)
+        
+        print()
+        print("="*60)
+        print("Load Balancer Ready!")
+        print(f"Listening on port {self.listen_port}")
+        print("="*60)
+        print()
+        
+        try:
+            while self.running:
+                client_socket, client_address = listen_socket.accept()
+                client_thread = threading.Thread(
+                    target=self.handle_client,
+                    args=(client_socket, client_address),
+                    daemon=True
+                )
+                client_thread.start()
+                
+        except KeyboardInterrupt:
+            print("\n\nShutting down load balancer...")
+            self.print_stats()
+        finally:
+            self.running = False
+            listen_socket.close()
     
     def print_stats(self):
-        """Print load balancer statistics."""
         print("\n" + "="*60)
         print("LOAD BALANCER STATISTICS")
         print("="*60)
@@ -167,28 +243,7 @@ class LoadBalancer:
         print("="*60 + "\n")
 
 
-class LoadBalancerService(rpyc.Service):
-    """RPyC service that acts as a load balancer."""
-    
-    def __init__(self, load_balancer: LoadBalancer):
-        super().__init__()
-        self.lb = load_balancer
-    
-    def exposed_count_word(self, keyword, filename):
-        """Forward count_word request to backend server."""
-        return self.lb.forward_request('count_word', keyword, filename)
-    
-    def exposed_get_server_info(self):
-        """Return load balancer info."""
-        return {
-            'type': 'load_balancer',
-            'algorithm': self.lb.algorithm.value,
-            'healthy_servers': sum(1 for s in self.lb.servers if s.is_healthy),
-            'total_servers': len(self.lb.servers)
-        }
-
-
-async def main():
+def main():
     """Main function to start the load balancer."""
     
     # Get algorithm from environment or use default
@@ -201,42 +256,14 @@ async def main():
     print(f"Algorithm: {algorithm.value}")
     print()
     
-    # Create load balancer
-    lb = LoadBalancer(algorithm=algorithm)
+    lb = LoadBalancer(algorithm=algorithm, listen_port=18860)
     
-    # Add backend servers
     lb.add_server('server1', 18861, 'server1')
     lb.add_server('server2', 18861, 'server2')
     lb.add_server('server3', 18861, 'server3')
     
-    # Connect to all servers
-    lb.connect_to_servers()
-    
-    print()
-    print("="*60)
-    print("Load Balancer Ready!")
-    print("Listening on port 18860")
-    print("="*60)
-    print()
-    
-    # Start health check in background
-    asyncio.create_task(lb.health_check_loop())
-    
-    # Start RPyC server
-    from rpyc.utils.server import ThreadedServer
-    server = ThreadedServer(
-        LoadBalancerService(lb),
-        port=18860,
-        protocol_config={'allow_public_attrs': True}
-    )
-    
-    try:
-        # Run server in a thread to allow async health checks
-        await asyncio.get_event_loop().run_in_executor(None, server.start)
-    except KeyboardInterrupt:
-        print("\n\nShutting down load balancer...")
-        lb.print_stats()
+    lb.start()
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()

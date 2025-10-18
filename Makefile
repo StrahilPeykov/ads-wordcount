@@ -13,12 +13,10 @@ help:
 	@echo "make clean       - Clean up Docker resources"
 	@echo "make test        - Run standard client test"
 	@echo "make test-lb     - Run load balancer algorithm test"
-	@echo "make ps          - Show running containers"
-	@echo "make stats       - Show container stats"
 	@echo ""
 	@echo "Phase 3 - Testing Different Algorithms:"
-	@echo "make test-round-robin      - Test with Round Robin"
-	@echo "make test-least-conn       - Test with Least Connections"
+	@echo "make test-round-robin      - Test with Round Robin (5 clients)"
+	@echo "make test-least-conn       - Test with Least Connections (5 clients)"
 	@echo ""
 	@echo "Cache Management:"
 	@echo "make clear-cache           - Clear Redis cache"
@@ -44,7 +42,22 @@ logs-server:
 	docker-compose logs -f server1 server2 server3
 
 logs-client:
-	docker-compose logs -f client
+	docker-compose logs -f client1 client2 client3 client4 client5
+
+logs-client1:
+	docker-compose logs -f client1
+
+logs-client2:
+	docker-compose logs -f client2
+
+logs-client3:
+	docker-compose logs -f client3
+
+logs-client4:
+	docker-compose logs -f client4
+
+logs-client5:
+	docker-compose logs -f client5
 
 logs-redis:
 	docker-compose logs -f redis
@@ -57,45 +70,43 @@ clean:
 	docker image prune -f
 	docker network prune -f
 
-ps:
-	docker ps -a
-
-stats:
-	docker stats --no-stream
-
 rebuild:
 	docker-compose down
 	docker-compose build --no-cache
 	docker-compose up
 
 test:
-	docker-compose run --rm client python /app/client/client.py
+	docker-compose exec client1 python /app/client/client.py
 
 test-lb:
-	docker-compose run --rm client python /app/client/test_load_balancer.py
+	@echo "Running test with 5 concurrent clients..."
+	@docker-compose exec -T client1 python /app/client/test_load_balancer.py & \
+	docker-compose exec -T client2 python /app/client/test_load_balancer.py & \
+	docker-compose exec -T client3 python /app/client/test_load_balancer.py & \
+	docker-compose exec -T client4 python /app/client/test_load_balancer.py & \
+	docker-compose exec -T client5 python /app/client/test_load_balancer.py & \
+	wait
 
 test-round-robin:
-	@echo "Testing Round Robin Algorithm..."
 	@docker-compose down
 	@LB_ALGORITHM=round_robin docker-compose up -d
 	@sleep 5
-	@docker-compose run --rm client python /app/client/test_load_balancer.py
+	@make test-lb
 
 test-least-conn:
-	@echo "Testing Least Connections Algorithm..."
 	@docker-compose down
 	@LB_ALGORITHM=least_connections docker-compose up -d
 	@sleep 5
-	@docker-compose run --rm client python /app/client/test_load_balancer.py
+	@make test-lb
 
 clear-cache:
-	@echo "Clearing Redis cache..."
 	@docker-compose exec -T redis redis-cli FLUSHALL
-	@echo "✓ Cache cleared!"
 
 test-with-clear:
-	@echo "Clearing cache and running test..."
+	@echo "Ensuring services are running..."
+	@docker-compose up -d
+	@sleep 2
+	@echo "Clearing cache..."
 	@docker-compose exec -T redis redis-cli FLUSHALL
-	@echo "✓ Cache cleared, running test..."
 	@sleep 1
-	@docker-compose run --rm client python /app/client/test_load_balancer.py
+	@make test-lb

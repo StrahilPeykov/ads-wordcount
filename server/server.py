@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 Word Count Server
-Phase 2: Basic RPyC server implementation with Redis caching
-Phase 3: Added server identification for load balancing
+Phase 3: Added load balancing
 """
 
 import rpyc
@@ -32,13 +31,6 @@ class WordCountService(rpyc.Service):
     def exposed_count_word(self, keyword, filename):
         """
         Count occurrences of a keyword in the specified text file.
-        
-        Args:
-            keyword (str): The word to count
-            filename (str): Name of the text file
-            
-        Returns:
-            dict: Contains count, server info, and cache status
         """
         self.request_count += 1
         cache_key = f"{filename}:{keyword}"
@@ -84,9 +76,6 @@ class WordCountService(rpyc.Service):
     def exposed_get_server_info(self):
         """
         Return server information (useful for load balancing demonstration).
-        
-        Returns:
-            dict: Server information
         """
         return {
             'server_name': self.server_name,
@@ -97,9 +86,6 @@ class WordCountService(rpyc.Service):
     def exposed_health_check(self):
         """
         Health check endpoint for load balancer.
-        
-        Returns:
-            dict: Health status
         """
         try:
             # Check Redis connection

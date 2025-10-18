@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Word Count Client
-Phase 3: Updated to connect to load balancer and show server distribution
+Phase 3: Added load balancing
 """
 
 import rpyc
@@ -164,14 +164,4 @@ if __name__ == '__main__':
     print("="*70 + "\n")
     
     time.sleep(3)
-    run_count()
-
-
-if __name__ == '__main__':
-    print("Word Count Client - Phase 2")
-    print("="*60)
-    
-    # Wait a bit for server to be ready
-    time.sleep(2)
-
     run_count()

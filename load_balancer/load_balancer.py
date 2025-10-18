@@ -71,6 +71,8 @@ class LoadBalancer:
         async with self.lock:
             server = healthy_servers[self.current_server_index % len(healthy_servers)]
             self.current_server_index += 1
+            # Increment connection count immediately
+            await server.increment_connections()
         return server
     
     async def _least_connections(self) -> Optional[Server]:
@@ -78,7 +80,13 @@ class LoadBalancer:
         healthy_servers = [s for s in self.servers if s.is_healthy]
         if not healthy_servers:
             return None
-        return min(healthy_servers, key=lambda s: s.active_connections)
+        
+        async with self.lock:
+            # Find server with minimum active connections
+            server = min(healthy_servers, key=lambda s: s.active_connections)
+            # Increment immediately to reserve this server
+            await server.increment_connections()
+        return server
     
     async def check_server_health(self, server: Server) -> bool:
         """
@@ -87,7 +95,7 @@ class LoadBalancer:
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(server.host, server.port),
-                timeout=2.0
+                timeout=1.0 
             )
             writer.close()
             await writer.wait_closed()
@@ -99,23 +107,34 @@ class LoadBalancer:
         print("[Health Monitor] Starting health check loop...")
         
         while self.running:
-            await asyncio.sleep(3)  # Check every 3 seconds
-            print("\n[Health Check] Checking server health...")
-            
-            for server in self.servers:
+            health_results = await asyncio.gather(
+                *[self.check_server_health(server) for server in self.servers],
+                return_exceptions=True
+            )
+            status_changes = []
+            for server, is_healthy in zip(self.servers, health_results):
                 was_healthy = server.is_healthy
-                is_healthy = await self.check_server_health(server)
-                server.is_healthy = is_healthy
+                server.is_healthy = is_healthy if isinstance(is_healthy, bool) else False
                 server.last_health_check = time.time()
                 
-                if was_healthy and not is_healthy:
-                    print(f"  {server.name}: ✗ FAILED")
-                elif not was_healthy and is_healthy:
-                    print(f"  {server.name}: ✓ RECOVERED")
-                else:
-                    status = "✓ HEALTHY" if is_healthy else "✗ UNHEALTHY"
-                    print(f"  {server.name}: {status} (Requests: {server.total_requests})")
-    
+                if was_healthy and not server.is_healthy:
+                    status_changes.append(f"  X {server.name} FAILED")
+                elif not was_healthy and server.is_healthy:
+                    status_changes.append(f"  + {server.name} RECOVERED")
+            
+            if status_changes:
+                print("\n[Health Check] Status Changes:")
+                for change in status_changes:
+                    print(change)
+            
+            print(f"\n[Health Check]| ", end="")
+            for server in self.servers:
+                status = "alive" if server.is_healthy else "dead"
+                print(f"{server.name}: {status} - {server.total_requests} requests | ", end="")
+            print()  
+
+            await asyncio.sleep(3)  # Check every 3 seconds
+
     async def forward_data(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str):
         """
         Forward data from source to destination stream.
@@ -153,7 +172,6 @@ class LoadBalancer:
                 await client_writer.wait_closed()
                 return
             
-            await server.increment_connections()
             print(f"→ Forwarding {client_address} to {server.name}")
             
             # Connect to backend server
@@ -162,7 +180,7 @@ class LoadBalancer:
                 timeout=30.0
             )
             
-            # Forward data bidirectionally using asyncio.gather
+            # Forward data bidirectionally 
             await asyncio.gather(
                 self.forward_data(client_reader, server_writer, "client→server"),
                 self.forward_data(server_reader, client_writer, "server→client"),

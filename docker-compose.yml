@@ -71,7 +71,7 @@ services:
     container_name: word_count_lb
     volumes:
       - ./load_balancer:/app/load_balancer
-    command: python /app/load_balancer/load_balancer.py
+    command: python -u /app/load_balancer/load_balancer.py
     ports:
       - "18860:18860"
     depends_on:
@@ -81,12 +81,14 @@ services:
     networks:
       - word_count_network
     environment:
-      - LB_ALGORITHM=round_robin
+      - LB_ALGORITHM=least_connections
+      - PYTHONUNBUFFERED=1
 
-  # Client (now connects to load balancer)
-  client:
+  # Client 1
+  client1:
     build: .
-    container_name: word_count_client
+    container_name: word_count_client1
+    hostname: client1
     volumes:
       - ./client:/app/client
     command: sleep infinity
@@ -94,10 +96,78 @@ services:
       - load_balancer
     networks:
       - word_count_network
+    environment:
+      - CLIENT_ID=1
     stdin_open: true
     tty: true
-    profiles:
-      - testing
+
+  # Client 2
+  client2:
+    build: .
+    container_name: word_count_client2
+    hostname: client2
+    volumes:
+      - ./client:/app/client
+    command: sleep infinity
+    depends_on:
+      - load_balancer
+    networks:
+      - word_count_network
+    environment:
+      - CLIENT_ID=2
+    stdin_open: true
+    tty: true
+
+  # Client 3
+  client3:
+    build: .
+    container_name: word_count_client3
+    hostname: client3
+    volumes:
+      - ./client:/app/client
+    command: sleep infinity
+    depends_on:
+      - load_balancer
+    networks:
+      - word_count_network
+    environment:
+      - CLIENT_ID=3
+    stdin_open: true
+    tty: true
+
+  # Client 4
+  client4:
+    build: .
+    container_name: word_count_client4
+    hostname: client4
+    volumes:
+      - ./client:/app/client
+    command: sleep infinity
+    depends_on:
+      - load_balancer
+    networks:
+      - word_count_network
+    environment:
+      - CLIENT_ID=4
+    stdin_open: true
+    tty: true
+
+  # Client 5
+  client5:
+    build: .
+    container_name: word_count_client5
+    hostname: client5
+    volumes:
+      - ./client:/app/client
+    command: sleep infinity
+    depends_on:
+      - load_balancer
+    networks:
+      - word_count_network
+    environment:
+      - CLIENT_ID=5
+    stdin_open: true
+    tty: true
 
 networks:
   word_count_network:

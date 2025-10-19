@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Load Balancer Testing Script
-Phase 3: Test different load balancing algorithms with multiple clients
+Phase 4: Added fault tolerance
 """
 
 import rpyc
@@ -113,7 +113,7 @@ def main():
     output = []
     
     output.append("\n" + "="*70)
-    output.append(f"[{client_name}] LOAD BALANCER TEST - PHASE 3")
+    output.append(f"[{client_name}] LOAD BALANCER TEST - PHASE 4")
     output.append("="*70)
     
     output.append(f"\n[{client_name}] Waiting for services to be ready...")

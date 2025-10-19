@@ -52,7 +52,7 @@ class LoadBalancer:
     def add_server(self, host: str, port: int, name: str):
         server = Server(host, port, name)
         self.servers.append(server)
-        print(f"✓ Added server: {server}")
+        print(f"[LoadBalancer] Added server: {server}")
     
     async def get_next_server(self) -> Optional[Server]:
         if self.algorithm == LoadBalancingAlgorithm.ROUND_ROBIN:
@@ -118,19 +118,24 @@ class LoadBalancer:
                 server.last_health_check = time.time()
                 
                 if was_healthy and not server.is_healthy:
-                    status_changes.append(f"  X {server.name} FAILED")
+                    status_changes.append(f"  [FAILED] {server.name} - Server is DOWN")
                 elif not was_healthy and server.is_healthy:
-                    status_changes.append(f"  + {server.name} RECOVERED")
+                    status_changes.append(f"  [RECOVERED] {server.name} - Server is back UP")
             
             if status_changes:
-                print("\n[Health Check] Status Changes:")
+                print("\n" + "="*60)
+                print("[Health Check] STATUS CHANGES DETECTED")
+                print("="*60)
                 for change in status_changes:
                     print(change)
+                print("="*60)
             
-            print(f"\n[Health Check]| ", end="")
+            # Print current status
+            healthy_count = sum(1 for s in self.servers if s.is_healthy)
+            print(f"\n[Health Check] Servers: {healthy_count}/{len(self.servers)} healthy | ", end="")
             for server in self.servers:
-                status = "alive" if server.is_healthy else "dead"
-                print(f"{server.name}: {status} - {server.total_requests} requests | ", end="")
+                status = "UP  " if server.is_healthy else "DOWN"
+                print(f"{server.name}:{status} ({server.total_requests} req) | ", end="")
             print()  
 
             await asyncio.sleep(3)  # Check every 3 seconds
@@ -167,12 +172,12 @@ class LoadBalancer:
         try:
             server = await self.get_next_server()
             if not server:
-                print(f"✗ No healthy servers available for {client_address}")
+                print(f"[LoadBalancer] No healthy servers available for {client_address}")
                 client_writer.close()
                 await client_writer.wait_closed()
                 return
             
-            print(f"→ Forwarding {client_address} to {server.name}")
+            print(f"[LoadBalancer] Forwarding {client_address} to {server.name}")
             
             # Connect to backend server
             server_reader, server_writer = await asyncio.wait_for(
@@ -188,7 +193,7 @@ class LoadBalancer:
             )
             
         except Exception as e:
-            print(f"✗ Error handling client {client_address}: {e}")
+            print(f"[LoadBalancer] Error handling client {client_address}: {e}")
             if server:
                 server.is_healthy = False
         finally:
@@ -251,8 +256,8 @@ class LoadBalancer:
         print(f"Healthy Servers: {sum(1 for s in self.servers if s.is_healthy)}")
         print("\nPer-Server Stats:")
         for server in self.servers:
-            status = "✓" if server.is_healthy else "✗"
-            print(f"  {status} {server.name:10} | Requests: {server.total_requests:3} | Active: {server.active_connections}")
+            status = "UP  " if server.is_healthy else "DOWN"
+            print(f"  [{status}] {server.name:10} | Requests: {server.total_requests:3} | Active: {server.active_connections}")
         print("="*60 + "\n")
 
 

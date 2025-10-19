@@ -81,7 +81,7 @@ services:
     networks:
       - word_count_network
     environment:
-      - LB_ALGORITHM=least_connections
+      - LB_ALGORITHM=round_robin
       - PYTHONUNBUFFERED=1
 
   # Client 1

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Word Count Client
-Phase 3: Added load balancing
+Phase 4: Added fault tolerance
 """
 
 import rpyc
@@ -30,10 +30,10 @@ class WordCountClient:
                 self.port,
                 config={'allow_public_attrs': True}
             )
-            print("✓ Connected successfully!")
+            print("[Client] Connected successfully!")
             return True
         except Exception as e:
-            print(f"✗ Connection failed: {e}")
+            print(f"[Client] Connection failed: {e}")
             return False
     
     def count_word(self, keyword, filename):
@@ -100,7 +100,7 @@ def run_count():
     ]
     
     print("\n" + "="*70)
-    print("PHASE 3 - LOAD BALANCING TEST")
+    print("PHASE 4- FAULT TOLERANCE TEST")
     print("="*70)
     print("Running test queries...\n")
     
@@ -160,7 +160,7 @@ def run_count():
 
 if __name__ == '__main__':
     print("\n" + "="*70)
-    print("WORD COUNT CLIENT - PHASE 3")
+    print("WORD COUNT CLIENT - PHASE 4")
     print("="*70 + "\n")
     
     time.sleep(3)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Word Count Server
-Phase 3: Added load balancing
+Phase 4: Added fault tolerance
 """
 
 import rpyc
